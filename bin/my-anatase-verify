@@ -18,9 +18,15 @@ for dev in /sys/block/nvme* /sys/block/mmcblk*; do
   [[ -e "$dev/queue/scheduler" ]] && echo "$(basename "$dev"): $(cat "$dev/queue/scheduler")"
 done
 
-echo -e "\n=== [4/6] MediaTek MT7922 Wi-Fi & Bluetooth Rules ==="
-grep -H "wifi.powersave" /etc/NetworkManager/conf.d/99-wifi-powersave-off.conf 2>/dev/null || echo "MISSING: 99-wifi-powersave-off.conf"
+echo -e "\n=== [4/6] Bluetooth, NMI watchdog, THP, Flatpak auto-updates ==="
 [[ -f /etc/udev/rules.d/99-bluetooth-wake.rules ]] && echo "OK: 99-bluetooth-wake.rules installed" || echo "MISSING: 99-bluetooth-wake.rules"
+echo "nmi_watchdog: $(cat /proc/sys/kernel/nmi_watchdog) (Expected: 0)"
+echo "THP defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag) (Expected: [defer+madvise])"
+if grep -qs '^UseUnattendedUpdates=true' /etc/xdg/PlasmaDiscoverUpdates; then
+  echo "OK: Discover unattended updates on (keeps Flatpaks updated)"
+else
+  echo "WARNING: Discover unattended updates are off in /etc/xdg/PlasmaDiscoverUpdates; Flatpaks won't auto-update"
+fi
 
 echo -e "\n=== [5/6] C4 USB Security Guardrail Audit ==="
 if grep -q '0666\|idVendor}=="\*"' /etc/udev/rules.d/99-usb-serial-passthrough.rules 2>/dev/null; then

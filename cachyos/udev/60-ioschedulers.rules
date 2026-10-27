@@ -1,2 +1,3 @@
+# NVMe: kyber, as in CachyOS-Settings. SD cards and USB/SATA disks are left to
+# Anatase's own 60-block-scheduler.rules (bfq), which this file used to override.
 ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="kyber"
-ACTION=="add|change", KERNEL=="sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"

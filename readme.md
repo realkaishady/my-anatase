@@ -11,7 +11,7 @@ Published at `ghcr.io/realkaishady/my-anatase:stable` (also `:latest`, same imag
 | Path in repo | Goes to | Notes |
 | --- | --- | --- |
 | `Containerfile` `dnf` line | `/usr` | `btop` (the others are already in the base image) |
-| [`cachyos/`](./cachyos/) | `/etc` (and `/usr/lib` for sysctl and tmpfiles) | CachyOS and Legion Go tuning: zram the size of RAM, swappiness 150, kyber on NVMe, Wi-Fi powersave off, `uaccess`-only USB serial rule, Discover notifier off |
+| [`cachyos/`](./cachyos/) | `/etc` (audio helper in `/usr/lib/udev`) | CachyOS and Legion Go tuning: zram the size of RAM, swappiness 150, kyber on NVMe (SD cards keep Anatase's `bfq`), NMI watchdog off, THP defrag `defer+madvise`, CachyOS's AC/battery audio power rule, `uaccess`-only USB serial rule. Discover's update settings stay at Anatase's defaults, because its unattended updates keep Flatpak apps current |
 | [`bin/my-anatase-verify`](./bin/my-anatase-verify) | `/usr/bin` | Host check of the booted image and the tuning above. Run it on the host: `my-anatase-verify` |
 | [`space/`](./space/) | **not in the image** | Files for inside the Ubuntu Space, which has its own `/usr` and `/etc` and can't see the host's. See below |
 

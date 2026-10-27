@@ -10,15 +10,14 @@ RUN dnf -y install \
     wireguard-tools
 
 # 2. Install audited CachyOS & Lenovo Legion Go (Z1 Extreme) system drop-ins
+# Discover's update settings are left at Anatase's defaults: its unattended
+# updates are what keep Flatpak apps (Anatase Browser, Steam...) up to date.
 COPY cachyos/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
 COPY cachyos/sysctl.d/ /etc/sysctl.d/
-COPY cachyos/sysctl.d/ /usr/lib/sysctl.d/
 COPY cachyos/udev/ /etc/udev/rules.d/
+COPY --chmod=0755 cachyos/udev-helpers/audio-pm-ctl /usr/lib/udev/audio-pm-ctl
 COPY cachyos/tmpfiles.d/ /etc/tmpfiles.d/
-COPY cachyos/tmpfiles.d/ /usr/lib/tmpfiles.d/
 COPY cachyos/modprobe.d/ /etc/modprobe.d/
-COPY cachyos/NetworkManager/conf.d/ /etc/NetworkManager/conf.d/
-COPY cachyos/xdg/ /etc/xdg/
 
 # 3. Install the Day-2 verification script
 # Goes in /usr/bin, not /usr/local/bin: on bootc images /usr/local points
