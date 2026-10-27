@@ -38,7 +38,7 @@ else
 fi
 
 echo -e "\n=== [6/6] /etc/containers/policy.json Drift Check ==="
-drift="$(sudo ostree admin config-diff | grep policy || true)"
+drift="$(sudo ostree admin config-diff | grep "containers/policy.json" || true)"
 if [[ -z "$drift" ]]; then
   echo "OK: /etc/containers/policy.json is unmodified (tracks image policy)."
 else

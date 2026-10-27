@@ -59,7 +59,7 @@ To turn it back on, restore what `2bc5b0d` removed: the *Check signing setup* an
 2. In this repo on GitHub: **Settings > Secrets and variables > Actions**, add `SIGNING_KEY` (the whole contents of `my-anatase.private`) and `SIGNING_PASSWORD`.
 3. Commit `my-anatase.pub` as `signing/my-anatase.pub`. That push starts a signed build.
 
-If the host's `/etc/containers/policy.json` was ever edited by hand, the host keeps its own copy and the image's rule won't apply. Check with `sudo ostree admin config-diff | grep policy` (no output means unmodified), or run `my-anatase-verify`.
+If the host's `/etc/containers/policy.json` was ever edited by hand, the host keeps its own copy and the image's rule won't apply. Check with `sudo ostree admin config-diff | grep containers/policy.json` (no output means unmodified), or run `my-anatase-verify`.
 
 ## Using it on the Legion Go (Host ❯)
 
