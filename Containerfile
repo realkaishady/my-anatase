@@ -2,7 +2,7 @@ FROM i.anatase.org/anatase:stable
 
 # Do your thing...
 # Install btop
-# RUN dnf -y install btop
+RUN dnf -y install btop
 
 # Install coolercontrol
 # # For COPRs specify fedora-* as dnf will try to look for an anatase COPR
