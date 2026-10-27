@@ -20,7 +20,7 @@ RUN bash /tmp/signing/install-policy.sh "$IMAGE_REF" && \
     rm -rf /tmp/signing
 
 # Cleanup (leave this here)
-RUN rm -rf /var && \
+RUN rm -rf /var /run/dnf && \
     mkdir -p /var/tmp
 
 # Check the result is a valid bootc image (leave this last)

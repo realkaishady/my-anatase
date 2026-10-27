@@ -2,8 +2,10 @@
 # Push a locally built image to the registry under one or more tags, signing
 # it with a sigstore key when one is provided.
 #
-# The first tag is pushed (and signed). The other tags are pointed at the
-# same manifest digest, so one signature covers all of them.
+# The first tag is pushed (and signed) with podman. The other tags are
+# pointed at the same manifest digest with skopeo, so one signature covers
+# all of them. (skopeo can't read rootless containers-storage on GitHub's
+# Ubuntu runners: AppArmor blocks its user-namespace re-exec. podman can.)
 #
 # Env:
 #   SIGNING_KEY       contents of the private key from
@@ -26,13 +28,17 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # Store and read signatures as sigstore attachments in the registry.
-mkdir -p "$work/registries.d"
+# podman only reads registries.d from fixed places; for a non-root user that
+# is ~/.config/containers/registries.d.
+regd="$HOME/.config/containers/registries.d"
+mkdir -p "$regd"
 printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$dest" \
-    > "$work/registries.d/dest.yaml"
+    > "$regd/zz-my-anatase-publish.yaml"
 
-common=(--registries.d "$work/registries.d" --retry-times 3)
+podman_tls=(); skopeo_tls=()
 if [[ "${TLS_VERIFY:-true}" == "false" ]]; then
-    common+=(--src-tls-verify=false --dest-tls-verify=false)
+    podman_tls=(--tls-verify=false)
+    skopeo_tls=(--src-tls-verify=false --dest-tls-verify=false)
 fi
 
 sign=()
@@ -48,13 +54,14 @@ else
     echo "publish: no SIGNING_KEY, pushing unsigned" >&2
 fi
 
-skopeo copy "${common[@]}" "${sign[@]}" --digestfile "$work/digest" \
-    "containers-storage:$src" "docker://$dest:$first" >&2
+podman push "${podman_tls[@]}" "${sign[@]}" --digestfile "$work/digest" \
+    "$src" "docker://$dest:$first" >&2
 digest="$(cat "$work/digest")"
 [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "no digest from push"
 
 for tag in "$@"; do
-    skopeo copy "${common[@]}" --preserve-digests --remove-signatures \
+    skopeo copy "${skopeo_tls[@]}" --registries.d "$regd" --retry-times 3 \
+        --preserve-digests --remove-signatures \
         "docker://$dest@$digest" "docker://$dest:$tag" >&2
 done
 
