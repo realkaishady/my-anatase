@@ -1,0 +1,2 @@
+SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_ONLINE}=="1", TEST=="/sys/module/snd_hda_intel", RUN+="/bin/sh -c 'echo 0 > /sys/module/snd_hda_intel/parameters/power_save'"
+SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_STATUS}=="Discharging", KERNEL=="BAT*|BATT", TEST=="/sys/module/snd_hda_intel", RUN+="/bin/sh -c 'echo 10 > /sys/module/snd_hda_intel/parameters/power_save'"

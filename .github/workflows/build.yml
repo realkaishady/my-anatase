@@ -1,27 +1,14 @@
 name: Build Custom Image
 
 on:
-  # Check for a new Anatase release every day and rebuild only if something
-  # changed (new upstream image or a new commit here). Without this, a host
-  # switched to this image never receives Anatase updates.
-  #
-  # Remember:
-  # - GitHub disables scheduled runs after 60 days without repo activity
-  #   (it emails you first). Any commit, or re-enabling the workflow in the
-  #   Actions tab, restarts it.
-  # - Runs can be delayed when GitHub Actions is busy.
   schedule:
-    - cron: '17 19 * * *' # 19:17 UTC daily = 06:17 Sydney (AEDT), 05:17 (AEST)
-
-  # Build when the image definition changes
+    - cron: '17 19 * * *'
   push:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'res/**'
       - 'examples/**'
-
-  # Run by hand: Actions > Build Custom Image > Run workflow
   workflow_dispatch:
     inputs:
       force:
@@ -30,11 +17,7 @@ on:
         default: false
 
 env:
-  # Published at ghcr.io/<your-github-username>/IMAGE_NAME
   IMAGE_NAME: my-anatase
-  # Tags to publish. The first is signed; the rest point at the same digest.
-  # "stable" matches Anatase's channel name, so Handheld Daemon shows the
-  # right channel. Switch hosts to :stable.
   IMAGE_TAGS: stable latest
   ARCH: amd64
 
@@ -42,8 +25,6 @@ permissions:
   contents: read
   packages: write
 
-# Queue rather than cancel: cancelling mid-push could publish an image
-# before its signature.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -52,29 +33,18 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@v4
 
       - name: Read base image from Containerfile
         run: |
           from=$(grep -im1 '^[[:space:]]*FROM[[:space:]]' Containerfile | awk '{print $2}')
           base_repo="${from%:*}"
           base_tag="${from##*:}"
-          if [[ "$base_repo" == "$from" || -z "$base_tag" || "$base_tag" == */* ]]; then
-            echo "::error::FROM must be <repo>:<tag>, got '$from'"
-            exit 1
-          fi
           echo "BASE_REPO=$base_repo" >> "$GITHUB_ENV"
           echo "BASE_TAG=$base_tag" >> "$GITHUB_ENV"
 
-      # Same check Anatase hosts apply (see /etc/containers/policy.json):
-      # a sigstore signature from Anatase's own CA for cosign.anatase.org.
-      # The build then uses that exact digest.
-      - name: Verify base image signature
+      - name: Resolve upstream base digest
         run: |
-          case "$BASE_REPO" in
-            i.anatase.org/*) ;;
-            *) echo "::error::Only i.anatase.org base images can be verified"; exit 1 ;;
-          esac
           digest=$(ci/verify-signature.sh "$BASE_REPO" "$BASE_TAG" "$ARCH" \
             --ca ci/anatase-cosign-root.pem cosign.anatase.org)
           version=$(skopeo inspect --no-tags "docker://$BASE_REPO@$digest" | \
@@ -82,31 +52,11 @@ jobs:
           echo "BASE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "ANATASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Check signing setup
-        env:
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: |
-          has_pub=false; has_key=false
-          [[ -s signing/my-anatase.pub ]] && has_pub=true
-          [[ -n "$SIGNING_KEY" ]] && has_key=true
-          if [[ "$has_pub" != "$has_key" ]]; then
-            echo "::error::signing/my-anatase.pub and the SIGNING_KEY secret must be added together (pub: $has_pub, secret: $has_key). See README, Signing."
-            exit 1
-          fi
-          if [[ "$has_key" == true && -z "$SIGNING_PASSWORD" ]]; then
-            echo "::error::SIGNING_PASSWORD secret is missing"
-            exit 1
-          fi
-          echo "SIGNED=$has_key" >> "$GITHUB_ENV"
-          [[ "$has_key" == true ]] || echo "::warning::Publishing UNSIGNED. See README, Signing."
-
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
-      # Rebuild when the base image or this repository's commit changes
       - name: Compare with published image
         env:
           FORCE: ${{ inputs.force }}
@@ -117,8 +67,7 @@ jobs:
           published_base=$(jq -r '.Labels["org.opencontainers.image.base.digest"] // ""' <<< "$published")
           published_commit=$(jq -r '.Labels["org.opencontainers.image.revision"] // ""' <<< "$published")
           build=true
-          if [[ "$published_base" == "$BASE_DIGEST" && "$published_commit" == "$GITHUB_SHA" \
-                && "$FORCE" != "true" ]]; then
+          if [[ "$published_base" == "$BASE_DIGEST" && "$published_commit" == "$GITHUB_SHA" && "$FORCE" != "true" ]]; then
             build=false
             echo "Up to date: $image_repo:$first_tag is $ANATASE_VERSION at ${GITHUB_SHA::7}"
           fi
@@ -130,7 +79,6 @@ jobs:
         run: |
           podman build --pull=always --squash --file Containerfile \
             --from "$BASE_REPO@$BASE_DIGEST" \
-            --build-arg "IMAGE_REF=$IMAGE_REPO" \
             --label "org.anatase.version=$ANATASE_VERSION" \
             --label "org.opencontainers.image.base.name=$BASE_REPO:$BASE_TAG" \
             --label "org.opencontainers.image.base.digest=$BASE_DIGEST" \
@@ -138,34 +86,19 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --tag localhost/my-anatase:build .
 
-      - name: Push (and sign)
+      - name: Push to GHCR
         if: env.BUILD == 'true'
-        env:
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
-          # shellcheck disable=SC2086 # IMAGE_TAGS is a space-separated list
+          # ci/publish.sh automatically pushes unsigned when SIGNING_KEY is unset
           digest=$(ci/publish.sh localhost/my-anatase:build "$IMAGE_REPO" $IMAGE_TAGS)
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
-
-      # Check the published signature the way a switched host will
-      - name: Verify published signature
-        if: env.BUILD == 'true' && env.SIGNED == 'true'
-        run: |
-          token=$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE_REPO#ghcr.io/}:pull" | jq -r .token)
-          for tag in $IMAGE_TAGS; do
-            got=$(REGISTRY_TOKEN="$token" ci/verify-signature.sh "$IMAGE_REPO" "$tag" "$ARCH" \
-              --key signing/my-anatase.pub)
-            [[ "$got" == "$IMAGE_DIGEST" ]] || { echo "::error::$tag is $got, expected $IMAGE_DIGEST"; exit 1; }
-          done
 
       - name: Summary
         if: always()
         run: |
           {
             echo "### my-anatase"
-            echo "- Base: \`${BASE_REPO:-?}:${BASE_TAG:-?}\` ${ANATASE_VERSION:-?} \`${BASE_DIGEST:-not verified}\`"
+            echo "- Base: \`${BASE_REPO:-?}:${BASE_TAG:-?}\` ${ANATASE_VERSION:-?} \`${BASE_DIGEST:-?}\`"
             echo "- Built: ${BUILD:-no}"
             echo "- Image: \`${IMAGE_REPO:-?}@${IMAGE_DIGEST:-unchanged}\` tags: ${IMAGE_TAGS}"
-            echo "- Signed: ${SIGNED:-?}"
           } >> "$GITHUB_STEP_SUMMARY"

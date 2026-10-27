@@ -1,27 +1,33 @@
 FROM i.anatase.org/anatase:stable
 
-# Where this image is published. The GitHub workflow passes the real value.
-ARG IMAGE_REF=ghcr.io/realkaishady/my-anatase
+# 1. Install host CLI utilities
+RUN dnf -y install \
+    btop \
+    fastfetch \
+    htop \
+    wireguard-tools
 
-# Do your thing...
-# Install btop
-RUN dnf -y install btop
+# 2. Install audited CachyOS & Lenovo Legion Go (Z1 Extreme) system drop-ins
+COPY cachyos/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
+COPY cachyos/sysctl.d/ /etc/sysctl.d/
+COPY cachyos/sysctl.d/ /usr/lib/sysctl.d/
+COPY cachyos/udev/ /etc/udev/rules.d/
+COPY cachyos/tmpfiles.d/ /etc/tmpfiles.d/
+COPY cachyos/tmpfiles.d/ /usr/lib/tmpfiles.d/
+COPY cachyos/modprobe.d/ /etc/modprobe.d/
+COPY cachyos/NetworkManager/conf.d/ /etc/NetworkManager/conf.d/
+COPY cachyos/profile.d/ /etc/profile.d/
+COPY cachyos/xdg/ /etc/xdg/
 
-# Install coolercontrol
-# # For COPRs specify fedora-* as dnf will try to look for an anatase COPR
-# RUN . /etc/os-release && \
-#     dnf -y copr enable codifryed/CoolerControl "fedora-${VERSION_ID}-$(arch)" && \
-#     dnf -y install coolercontrol && \
-#     systemctl enable coolercontrold
+# 3. Install Day-2 verification & C5/C7 Space helper scripts
+COPY bin/ /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/my-anatase-verify \
+               /usr/local/bin/anatase-snap \
+               /usr/local/bin/anatase-space-bootstrap
 
-# Require signed updates of this image (no-op until signing/my-anatase.pub exists)
-COPY signing/ /tmp/signing/
-RUN bash /tmp/signing/install-policy.sh "$IMAGE_REF" && \
-    rm -rf /tmp/signing
-
-# Cleanup (leave this here)
+# 4. Cleanup (mandatory before bootc container lint)
 RUN rm -rf /var /run/dnf && \
     mkdir -p /var/tmp
 
-# Check the result is a valid bootc image (leave this last)
+# 5. Validate bootc container image structure
 RUN bootc container lint

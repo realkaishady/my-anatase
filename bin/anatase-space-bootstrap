@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! grep -q '^ID=ubuntu' /etc/os-release 2>/dev/null; then
+  echo "ERROR: Run anatase-space-bootstrap INSIDE your Ubuntu Space, not on the Layer 1 Host." >&2
+  exit 1
+fi
+
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [[ -f "$rc" && ! -f "${rc}.layer1.bak" ]]; then
+    cp -a "$rc" "${rc}.layer1.bak"
+    echo "Backed up $rc -> ${rc}.layer1.bak"
+  fi
+done
+
+if [[ "$HOME" == /home/* && ! -L "$HOME/.config/containers" ]]; then
+  mkdir -p "$HOME/.config/containers"
+  cat << 'STORAGE' > "$HOME/.config/containers/storage.conf"
+[storage]
+driver = "overlay"
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"
+STORAGE
+  echo "Configured nested fuse-overlayfs in $HOME/.config/containers/storage.conf (C7 safe)."
+fi
+
+echo "Layer 2 Ubuntu Space bootstrap complete."

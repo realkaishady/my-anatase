@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f /run/.containerenv ]]; then
+  echo "ERROR: Run anatase-snap from the Layer 1 Host (❯), never inside a Space." >&2
+  exit 1
+fi
+if (( EUID != 0 )); then
+  exec sudo -- "$0" "$@"
+fi
+
+cmd="${1:-list}"
+space="${2:-ubuntu}"
+label="${3:-$(date +%Y%m%d-%H%M%S)}"
+src="/var/lib/spaces/$space"
+snap_root="/var/lib/spaces-snapshots"
+mkdir -p "$snap_root"
+
+case "$cmd" in
+  create|snap)
+    [[ -d "$src" ]] || { echo "Space '$space' not found at $src" >&2; exit 1; }
+    echo "Stopping spaces@${space}.service for consistent snapshot..."
+    systemctl stop "spaces@${space}.service" || true
+    dest="${snap_root}/${space}-${label}"
+    btrfs subvolume snapshot -r "$src" "$dest" 2>/dev/null || cp -a --reflink=always "$src" "$dest"
+    echo "Snapshot created: $dest"
+    systemctl start "spaces@${space}.service" || true
+    ;;
+  list|ls)
+    ls -lh "$snap_root"
+    ;;
+  *)
+    echo "Usage: anatase-snap {create|list} [space_name] [snapshot_label]"
+    exit 1
+    ;;
+esac

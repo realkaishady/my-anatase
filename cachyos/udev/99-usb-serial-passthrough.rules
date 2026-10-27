@@ -1,0 +1,7 @@
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", TAG+="uaccess"

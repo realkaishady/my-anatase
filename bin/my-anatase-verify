@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== [1/6] Booted Image & Deployment Status ==="
+if [[ $EUID -eq 0 ]]; then
+  bootc status --format=json | jq -r '.status.booted.image | "Image:   \(.image.image)\nDigest:  \(.imageDigest)\nVersion: \(.version)"'
+else
+  sudo bootc status --format=json | jq -r '.status.booted.image | "Image:   \(.image.image)\nDigest:  \(.imageDigest)\nVersion: \(.version)"'
+fi
+
+echo -e "\n=== [2/6] ZRAM & Kernel Virtual Memory ==="
+zramctl --output NAME,ALGORITHM,DISKSIZE,DATA,COMPR,TOTAL || true
+echo "zswap enabled: $(cat /sys/module/zswap/parameters/enabled 2>/dev/null || echo 'N/A') (Expected: N)"
+sysctl vm.swappiness vm.vfs_cache_pressure vm.dirty_bytes net.ipv4.tcp_keepalive_time
+
+echo -e "\n=== [3/6] Storage I/O Schedulers ==="
+for dev in /sys/block/nvme* /sys/block/mmcblk*; do
+  [[ -e "$dev/queue/scheduler" ]] && echo "$(basename "$dev"): $(cat "$dev/queue/scheduler")"
+done
+
+echo -e "\n=== [4/6] MediaTek MT7922 Wi-Fi & Bluetooth Rules ==="
+grep -H "wifi.powersave" /etc/NetworkManager/conf.d/99-wifi-powersave-off.conf 2>/dev/null || echo "MISSING: 99-wifi-powersave-off.conf"
+[[ -f /etc/udev/rules.d/99-bluetooth-wake.rules ]] && echo "OK: 99-bluetooth-wake.rules installed" || echo "MISSING: 99-bluetooth-wake.rules"
+
+echo -e "\n=== [5/6] C4 USB Security Guardrail Audit ==="
+if grep -q '0666\|idVendor}=="\*"' /etc/udev/rules.d/99-usb-serial-passthrough.rules 2>/dev/null; then
+  echo "FAIL: Unsafe 0666 or wildcard rule found!"
+  exit 1
+else
+  echo "OK: 99-usb-serial-passthrough.rules uses vendor-scoped TAG+=\"uaccess\" only."
+fi
+
+echo -e "\n=== [6/6] /etc/containers/policy.json Drift Check ==="
+drift="$(sudo ostree admin config-diff | grep policy || true)"
+if [[ -z "$drift" ]]; then
+  echo "OK: /etc/containers/policy.json is unmodified (tracks image policy)."
+else
+  echo "WARNING: Local /etc/containers/policy.json drift detected: $drift"
+fi
