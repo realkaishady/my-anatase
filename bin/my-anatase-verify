@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+verify_failed=0
 
 echo "=== [1/6] Booted Image & Deployment Status ==="
 if [[ $EUID -eq 0 ]]; then
@@ -31,7 +32,7 @@ fi
 echo -e "\n=== [5/6] C4 USB Security Guardrail Audit ==="
 if grep -q '0666\|idVendor}=="\*"' /etc/udev/rules.d/99-usb-serial-passthrough.rules 2>/dev/null; then
   echo "FAIL: Unsafe 0666 or wildcard rule found!"
-  exit 1
+  verify_failed=1
 else
   echo "OK: 99-usb-serial-passthrough.rules uses vendor-scoped TAG+=\"uaccess\" only."
 fi
@@ -43,3 +44,10 @@ if [[ -z "$drift" ]]; then
 else
   echo "WARNING: Local /etc/containers/policy.json drift detected: $drift"
 fi
+
+# A failed check above doesn't stop the later ones; report it at the end.
+if [[ "$verify_failed" -ne 0 ]]; then
+  echo -e "\nRESULT: FAIL (see above)"
+  exit 1
+fi
+echo -e "\nRESULT: OK"

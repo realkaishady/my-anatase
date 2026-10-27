@@ -1,0 +1,11 @@
+# Keeps the GitHub Actions used by build.yml up to date. Actions are pinned to a
+# commit (with the version in a comment); Dependabot opens a pull request when
+# a new release comes out, so the pin doesn't go stale. Review and merge it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci

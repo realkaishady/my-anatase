@@ -17,7 +17,7 @@ Published at `ghcr.io/realkaishady/my-anatase:stable` (also `:latest`, same imag
 
 Files must go under `/usr` or `/etc`, not `/usr/local`: on bootc images `/usr/local` points into `/var`, which the build's cleanup step deletes.
 
-Snapshots use `anatase-snap` v4.3 from `_ANATASE_OPS/bin`, run by full path. It isn't shipped here.
+Snapshots use `anatase-snap` from the workbench in `_ANATASE_OPS/bin` (v4.3 or later), run by full path. It isn't shipped here.
 
 ### Space files (`space/`)
 

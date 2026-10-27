@@ -32,6 +32,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # A normal run takes 1-4 minutes; stop a hung build instead of waiting 6 hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -40,6 +42,10 @@ jobs:
           from=$(grep -im1 '^[[:space:]]*FROM[[:space:]]' Containerfile | awk '{print $2}')
           base_repo="${from%:*}"
           base_tag="${from##*:}"
+          if [[ "$base_repo" == "$from" || -z "$base_tag" || "$base_tag" == */* ]]; then
+            echo "::error::FROM must be <repo>:<tag>, got '$from'"
+            exit 1
+          fi
           echo "BASE_REPO=$base_repo" >> "$GITHUB_ENV"
           echo "BASE_TAG=$base_tag" >> "$GITHUB_ENV"
 
