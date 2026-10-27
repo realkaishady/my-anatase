@@ -15,7 +15,13 @@ done
 
 if [[ "$HOME" == /home/* && ! -L "$HOME/.config/containers" ]]; then
   mkdir -p "$HOME/.config/containers"
-  cat << 'STORAGE' > "$HOME/.config/containers/storage.conf"
+  conf="$HOME/.config/containers/storage.conf"
+  if [[ -e "$conf" ]]; then
+    bak="${conf}.pre-bootstrap-$(date +%Y%m%d-%H%M%S)"
+    cp -a "$conf" "$bak"
+    echo "Backed up existing $conf -> $bak"
+  fi
+  cat << 'STORAGE' > "$conf"
 [storage]
 driver = "overlay"
 [storage.options.overlay]

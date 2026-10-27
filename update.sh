@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -f /run/.containerenv ]] || grep -q '^ID=ubuntu' /etc/os-release 2>/dev/null; then
+if systemd-detect-virt --container --quiet || [[ -f /run/.containerenv ]] || ! grep -q '^ID=anatase' /etc/os-release 2>/dev/null; then
   echo "ERROR: Do not run ./update.sh inside a Space. Open a Layer 1 Host (❯) terminal instead." >&2
   exit 1
 fi
@@ -20,5 +20,5 @@ bootc update
 
 echo ""
 echo "NOTE: Host is now tracking local storage ($image)."
-echo "When finished testing, return to your signed CI stream with:"
+echo "When finished testing, return to the published GitHub image (unsigned) with:"
 echo "  sudo bootc switch ghcr.io/realkaishady/my-anatase:stable"

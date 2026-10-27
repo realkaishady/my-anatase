@@ -1,6 +1,8 @@
 FROM i.anatase.org/anatase:stable
 
 # 1. Install host CLI utilities
+# (fastfetch, htop and wireguard-tools are already in the base image; listed
+# so they stay if upstream ever drops them)
 RUN dnf -y install \
     btop \
     fastfetch \
@@ -16,14 +18,15 @@ COPY cachyos/tmpfiles.d/ /etc/tmpfiles.d/
 COPY cachyos/tmpfiles.d/ /usr/lib/tmpfiles.d/
 COPY cachyos/modprobe.d/ /etc/modprobe.d/
 COPY cachyos/NetworkManager/conf.d/ /etc/NetworkManager/conf.d/
-COPY cachyos/profile.d/ /etc/profile.d/
 COPY cachyos/xdg/ /etc/xdg/
 
-# 3. Install Day-2 verification & C5/C7 Space helper scripts
-COPY bin/ /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/my-anatase-verify \
-               /usr/local/bin/anatase-snap \
-               /usr/local/bin/anatase-space-bootstrap
+# 3. Install the Day-2 verification script
+# Goes in /usr/bin, not /usr/local/bin: on bootc images /usr/local points
+# into /var, which the cleanup step below deletes, so anything copied there
+# never reaches the published image.
+# Space-only helpers live in space/ and are not part of this image (a Space
+# has its own /usr and /etc and can't see the host's).
+COPY --chmod=0755 bin/my-anatase-verify /usr/bin/my-anatase-verify
 
 # 4. Cleanup (mandatory before bootc container lint)
 RUN rm -rf /var /run/dnf && \

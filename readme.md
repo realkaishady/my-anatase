@@ -2,9 +2,29 @@
 
 # my-anatase
 
-Personal Anatase image for a Lenovo Legion Go: stock `i.anatase.org/anatase:stable` plus the packages in [`Containerfile`](./Containerfile) (currently just `btop`). Made from [anatase-org/template](https://github.com/anatase-org/template) with **Use this template**.
+Personal Anatase image for a Lenovo Legion Go: stock `i.anatase.org/anatase:stable` plus what [`Containerfile`](./Containerfile) adds. Made from [anatase-org/template](https://github.com/anatase-org/template) with **Use this template**.
 
 Published at `ghcr.io/realkaishady/my-anatase:stable` (also `:latest`, same image).
+
+## What's in it
+
+| Path in repo | Goes to | Notes |
+| --- | --- | --- |
+| `Containerfile` `dnf` line | `/usr` | `btop` (the others are already in the base image) |
+| [`cachyos/`](./cachyos/) | `/etc` (and `/usr/lib` for sysctl and tmpfiles) | CachyOS and Legion Go tuning: zram the size of RAM, swappiness 150, kyber on NVMe, Wi-Fi powersave off, `uaccess`-only USB serial rule, Discover notifier off |
+| [`bin/my-anatase-verify`](./bin/my-anatase-verify) | `/usr/bin` | Host check of the booted image and the tuning above. Run it on the host: `my-anatase-verify` |
+| [`space/`](./space/) | **not in the image** | Files for inside the Ubuntu Space, which has its own `/usr` and `/etc` and can't see the host's. See below |
+
+Files must go under `/usr` or `/etc`, not `/usr/local`: on bootc images `/usr/local` points into `/var`, which the build's cleanup step deletes.
+
+Snapshots use `anatase-snap` v4.3 from `_ANATASE_OPS/bin`, run by full path. It isn't shipped here.
+
+### Space files (`space/`)
+
+Run these inside the Ubuntu Space, from the shared `Projects` folder (adjust the path to wherever this repo is cloned):
+
+- `anatase-space-bootstrap`: backs up `.bashrc`/`.zshrc` and writes a `fuse-overlayfs` `~/.config/containers/storage.conf` for podman inside the Space (an existing one is backed up first).
+- `profile.d/90-anatase-legion-workbench.sh`: build limits and ROCm variables for the Z1 Extreme's `gfx1103` iGPU. Install with `sudo cp space/profile.d/90-anatase-legion-workbench.sh /etc/profile.d/`, open a new login shell, and check with `echo $HSA_OVERRIDE_GFX_VERSION`. If that prints nothing, your shell doesn't read `/etc/profile.d`.
 
 ## How it stays up to date
 
@@ -22,26 +42,24 @@ GitHub turns scheduled runs off after 60 days with no activity in the repo (it e
 
 1. **Base signature.** [`ci/verify-signature.sh`](./ci/verify-signature.sh) checks the upstream image's sigstore signature against Anatase's root CA ([`ci/anatase-cosign-root.pem`](./ci/anatase-cosign-root.pem), copied from `anatase-org/anatase`), the same rule Anatase hosts apply in `/etc/containers/policy.json`. The build then uses that exact digest. If Anatase ever replaces its CA, the build fails here until the new certificate is copied in.
 2. **`bootc container lint`** runs as the last build step.
-3. **Signature of the result**, once signing is set up (below).
+3. Nothing checks the result's signature: signing is off (below).
 
-## Signing
+## Signing: off
 
-Until this is done, images are published **unsigned** (the workflow shows a warning). A host on an unsigned image accepts any update published under this name.
+Commit `2bc5b0d` turned signing off: the workflow no longer passes the signing secrets, and the image no longer installs a signature rule. Images are published **unsigned**, and a host on this image accepts any update published under `ghcr.io/realkaishady/my-anatase` without checking it. Anyone who can push to this repo or its package can change what the Legion Go boots.
 
-Once it's done, every image is signed, and the image itself tells the host to refuse unsigned updates of `ghcr.io/realkaishady/my-anatase` ([`signing/install-policy.sh`](./signing/install-policy.sh) adds a rule to `/etc/containers/policy.json`). The workflow refuses to run with only half of it in place.
+To turn it back on, restore what `2bc5b0d` removed: the *Check signing setup* and *Verify published signature* workflow steps, the `SIGNING_KEY`/`SIGNING_PASSWORD` env on the push step, the `IMAGE_REF` build arg, and the `install-policy.sh` step in the `Containerfile` (all in commit `3121c20`). Then:
 
 1. On the Legion Go, Host (❯), make the key pair somewhere private (not in `Projects`). It asks for a passphrase twice:
    ```zsh
    mkdir -p /var/home/geigal/.config/my-anatase-signing && cd /var/home/geigal/.config/my-anatase-signing && skopeo generate-sigstore-key --output-prefix my-anatase
    ```
    Check: `ls -l /var/home/geigal/.config/my-anatase-signing` lists `my-anatase.private` and `my-anatase.pub`.
-   Keep a copy of the private key and passphrase in your password manager. Losing it means making a new pair (and committing the new `.pub`).
-2. In this repo on GitHub: **Settings > Secrets and variables > Actions > New repository secret**, twice:
-   - `SIGNING_KEY`: the whole contents of `my-anatase.private`
-   - `SIGNING_PASSWORD`: the passphrase
-3. Commit `my-anatase.pub` as [`signing/my-anatase.pub`](./signing/). That push starts a signed build.
+   Keep a copy of the private key and passphrase in your password manager.
+2. In this repo on GitHub: **Settings > Secrets and variables > Actions**, add `SIGNING_KEY` (the whole contents of `my-anatase.private`) and `SIGNING_PASSWORD`.
+3. Commit `my-anatase.pub` as `signing/my-anatase.pub`. That push starts a signed build.
 
-If the host's `/etc/containers/policy.json` was ever edited by hand, the host keeps its own copy and the new rule won't apply. Check with `sudo ostree admin config-diff | grep policy` (no output means unmodified).
+If the host's `/etc/containers/policy.json` was ever edited by hand, the host keeps its own copy and the image's rule won't apply. Check with `sudo ostree admin config-diff | grep policy` (no output means unmodified), or run `my-anatase-verify`.
 
 ## Using it on the Legion Go (Host ❯)
 
@@ -53,7 +71,7 @@ Switch (the change applies at the next reboot; the current OS stays as the rollb
 ```zsh
 sudo bootc switch ghcr.io/realkaishady/my-anatase:stable
 ```
-After rebooting, check: `sudo bootc status` shows the ghcr image as booted, and `command -v btop` prints a path.
+After rebooting, check: `sudo bootc status` shows the ghcr image as booted, and `my-anatase-verify` runs.
 
 Go back to stock (Anatase's own signature rule still applies to this pull):
 ```zsh

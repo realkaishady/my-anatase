@@ -33,7 +33,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Read base image from Containerfile
         run: |
@@ -89,7 +89,8 @@ jobs:
       - name: Push to GHCR
         if: env.BUILD == 'true'
         run: |
-          # ci/publish.sh automatically pushes unsigned when SIGNING_KEY is unset
+          # Signing is off (commit 2bc5b0d): SIGNING_KEY isn't passed in, so
+          # ci/publish.sh pushes UNSIGNED. See README, Signing.
           digest=$(ci/publish.sh localhost/my-anatase:build "$IMAGE_REPO" $IMAGE_TAGS)
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
 
