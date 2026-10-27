@@ -48,13 +48,15 @@ GitHub turns scheduled runs off after 60 days with no activity in the repo (it e
 
 Commit `2bc5b0d` turned signing off: the workflow no longer passes the signing secrets, and the image no longer installs a signature rule. Images are published **unsigned**, and a host on this image accepts any update published under `ghcr.io/realkaishady/my-anatase` without checking it. Anyone who can push to this repo or its package can change what the Legion Go boots.
 
+This is a deliberate choice: it was reconsidered on 28 Oct 2026 and kept off.
+
 To turn it back on, restore what `2bc5b0d` removed: the *Check signing setup* and *Verify published signature* workflow steps, the `SIGNING_KEY`/`SIGNING_PASSWORD` env on the push step, the `IMAGE_REF` build arg, and the `install-policy.sh` step in the `Containerfile` (all in commit `3121c20`). Then:
 
 1. On the Legion Go, Host (❯), make the key pair somewhere private (not in `Projects`). It asks for a passphrase twice:
    ```zsh
-   mkdir -p /var/home/geigal/.config/my-anatase-signing && cd /var/home/geigal/.config/my-anatase-signing && skopeo generate-sigstore-key --output-prefix my-anatase
+   mkdir -p /var/home/geigai/.config/my-anatase-signing && cd /var/home/geigai/.config/my-anatase-signing && skopeo generate-sigstore-key --output-prefix my-anatase
    ```
-   Check: `ls -l /var/home/geigal/.config/my-anatase-signing` lists `my-anatase.private` and `my-anatase.pub`.
+   Check: `ls -l /var/home/geigai/.config/my-anatase-signing` lists `my-anatase.private` and `my-anatase.pub`.
    Keep a copy of the private key and passphrase in your password manager.
 2. In this repo on GitHub: **Settings > Secrets and variables > Actions**, add `SIGNING_KEY` (the whole contents of `my-anatase.private`) and `SIGNING_PASSWORD`.
 3. Commit `my-anatase.pub` as `signing/my-anatase.pub`. That push starts a signed build.
