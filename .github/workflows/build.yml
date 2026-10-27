@@ -1,0 +1,78 @@
+name: Build Custom Image
+
+on:
+  # Enable below to run on a schedule
+  # For example, on Monday Wednesday and Friday at 07:00 UTC
+  # Right before you brew your morning coffee
+  #
+  # Remember:
+  # - Github Actions will stop working after 60 days without repo activity
+  # - The action might not Github Actions is overloaded or be delayed
+  # - Consider the environment and resources you use when you build
+  #   the image unnecessarily.
+  #
+  # schedule:
+  #   - cron: '00 07 * * 1,3,5' # Monday, Wednesday, Friday at 07:00 UTC
+  
+  # Enable below to run this action when you push changes
+  # push:
+  #   branches: [master, main]
+
+  # This allows you to manually run the action through the GitHub Actions UI
+  workflow_dispatch:
+
+env:
+  # Customize the image name
+  # It will be published at ghcr.io/<your-github-username>/IMAGE_NAME:latest
+  IMAGE_NAME: my-anatase
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      # Rebuild when the base version or repository commit changes
+      # Remember the environment if you decide to remove this block
+      - name: Fetch image versions
+        run: |
+          base_image=$(grep -im1 '^[[:space:]]*FROM[[:space:]]' Containerfile | awk '{print $2}')
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:latest"
+
+          version=$(skopeo inspect --no-tags "docker://$base_image" | \
+            jq -er '.Labels["org.opencontainers.image.version"] | select(type == "string" and length > 0)')
+
+          published_image=$(skopeo inspect --no-tags "docker://$image" || echo '{}')
+          published_version=$(jq -r '.Labels["org.anatase.version"] // ""' <<< "$published_image")
+          published_commit=$(jq -r '.Labels["org.opencontainers.image.revision"] // ""' <<< "$published_image")
+
+          {
+            echo "IMAGE=$image"
+            echo "ANATASE_VERSION=$version"
+            echo "VERSION_MATCH=$([[ "$version" == "$published_version" ]] && echo true || echo false)"
+            echo "COMMIT_MATCH=$([[ "$GITHUB_SHA" == "$published_commit" ]] && echo true || echo false)"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and push
+        # Only build on hash or version changes
+        if: env.VERSION_MATCH != 'true' || env.COMMIT_MATCH != 'true'
+        run: |
+          podman build --pull=always --squash --file Containerfile \
+            --label "org.anatase.version=$ANATASE_VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$IMAGE" .
+          podman push "$IMAGE"
