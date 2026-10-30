@@ -1,0 +1,22 @@
+#!/bin/bash
+# bootstate-notify (my-anatase) - desktop notice when the OS is running the previous version.
+# Runs as the logged-in user at login and when /run/my-anatase/bootstate changes.
+set -u
+F="${BOOTSTATE_FILE:-/run/my-anatase/bootstate}"
+[ -r "$F" ] || exit 0
+get() { sed -n "s/^$1=//p" "$F" | head -n 1; }
+state="$(get state)"
+case "$state" in
+  reverted)
+    title="Running the previous OS version"
+    body="This boot is the older image $(get booted) (built $(get booted_built | cut -c1-10)); the newer $(get rollback) is in the rollback slot. Usually a rollback, e.g. hhd's Revert to Previous. Check: adeck → b (boot state). If you did it on purpose, ignore this."
+    ;;
+  queued)
+    title="A rollback is queued"
+    body="The next boot goes back to the previous OS version. Undo with: sudo bootc rollback (before rebooting). Details: adeck → b (boot state)."
+    ;;
+  *) exit 0 ;;
+esac
+busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications \
+  org.freedesktop.Notifications Notify 'susssasa{sv}i' \
+  "my-anatase" 0 "dialog-warning" "$title" "$body" 0 1 urgency y 2 0 >/dev/null 2>&1 || true

@@ -1,0 +1,31 @@
+#!/bin/bash
+# bootstate-write (my-anatase) - record which OS deployment is booted, for the login notice.
+# Runs as root at boot and whenever bootc's status changes. Writes /run/my-anatase/bootstate
+# (key=value, world-readable, gone at shutdown). Read-only towards the system.
+#
+# state=reverted  the booted image is older than the one in the rollback slot: a rollback
+#                 happened (hhd's "Revert to Previous" runs one without asking)
+# state=queued    a rollback is queued for the next boot
+# state=ok        otherwise
+set -u
+OUT_DIR="${BOOTSTATE_DIR:-/run/my-anatase}"
+json="$(${BOOTC_STATUS_CMD:-bootc status --format=json} 2>/dev/null)" || exit 0
+[ -n "$json" ] || exit 0
+summary="$(printf '%s' "$json" | jq -r '
+  def img(x): (x // {}).image // {};
+  def ts(x): (img(x).timestamp // "");
+  def dg(x): (img(x).imageDigest // "" | sub("^sha256:"; "") | .[0:12]);
+  .status as $s |
+  (if ($s.rollbackQueued // false) then "queued"
+   elif (ts($s.booted) != "" and ts($s.rollback) != "" and ts($s.booted) < ts($s.rollback)) then "reverted"
+   else "ok" end) as $state |
+  "state=\($state)",
+  "booted=\(dg($s.booted))", "booted_built=\(ts($s.booted))",
+  "rollback=\(dg($s.rollback))", "rollback_built=\(ts($s.rollback))",
+  "staged=\(dg($s.staged))", "staged_built=\(ts($s.staged))",
+  "image=\(img($s.booted).image.image // "")"
+')" || exit 0
+mkdir -p "$OUT_DIR"
+{ printf '%s\n' "$summary"; printf 'checked=%s\n' "$(date -Iseconds)"; } > "${OUT_DIR}/bootstate.tmp"
+chmod 0644 "${OUT_DIR}/bootstate.tmp"
+mv -f "${OUT_DIR}/bootstate.tmp" "${OUT_DIR}/bootstate"

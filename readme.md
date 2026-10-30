@@ -12,12 +12,15 @@ Published at `ghcr.io/realkaishady/my-anatase:stable` (also `:latest`, same imag
 | --- | --- | --- |
 | `Containerfile` `dnf` line | `/usr` | `btop` (the others are already in the base image) |
 | [`cachyos/`](./cachyos/) | `/etc` (audio helper in `/usr/lib/udev`) | CachyOS and Legion Go tuning: zram the size of RAM, swappiness 150, kyber on NVMe (SD cards keep Anatase's `bfq`), NMI watchdog off, THP defrag `defer+madvise`, CachyOS's AC/battery audio power rule, `uaccess`-only USB serial rule. Discover's update settings stay at Anatase's defaults, because its unattended updates keep Flatpak apps current |
-| [`bin/my-anatase-verify`](./bin/my-anatase-verify) | `/usr/bin` | Host check of the booted image and the tuning above. Run it on the host: `my-anatase-verify` |
+| [`bin/my-anatase-verify`](./bin/my-anatase-verify) | `/usr/bin` | Host check of the booted, staged and rollback images (warns when the booted one is the older), the tuning above, the fstab fix and the helpers below. Run it on the host: `my-anatase-verify` |
+| [`bin/anatase-snap`](./bin/anatase-snap) | `/usr/bin` | Space snapshots (`sudo anatase-snap create ubuntu --stop`). Shipped in the image so it's root-owned and read-only: nothing running in a Space can change what you run with sudo. Refuses to run in a container, re-checks the Space stopped, renames a copy that doesn't verify to `-CHECK` (restore refuses it), and marks a deleted snapshot's record so it no longer counts |
+| [`libexec/fstab-root-needs-ro`](./libexec/fstab-root-needs-ro) + [`systemd/system/bootc-fstab-edit.service.d/`](./systemd/system/bootc-fstab-edit.service.d/) | `/usr/libexec/my-anatase`, `/usr/lib/systemd/system` | Skips `bootc-fstab-edit.service` when `/` already has `ro`, so `/etc/fstab` isn't rewritten at every boot ([bootc-dev/bootc#2592](https://github.com/bootc-dev/bootc/issues/2592)). In the image, so a rollback can't bring the loop back (the old marker-line workaround lived in one deployment's `/etc`) |
+| [`libexec/bootstate-*`](./libexec/) + `my-anatase-bootstate.service`, user `my-anatase-bootnotice.{service,path}` | `/usr/libexec/my-anatase`, `/usr/lib/systemd/{system,user}` | Records at boot (and when bootc's status changes) whether the booted image is older than the rollback one, in `/run/my-anatase/bootstate`, and shows a desktop notice at login if so. hhd's update panel has a **Revert to Previous** that runs `bootc rollback` without asking; on 28 Oct 2026 that left the device on the older image for two days unnoticed. Read-only: it never changes deployments |
 | [`space/`](./space/) | **not in the image** | Files for inside the Ubuntu Space, which has its own `/usr` and `/etc` and can't see the host's. See below |
 
 Files must go under `/usr` or `/etc`, not `/usr/local`: on bootc images `/usr/local` points into `/var`, which the build's cleanup step deletes.
 
-Snapshots use `anatase-snap` from the workbench in `_ANATASE_OPS/bin` (v4.3 or later), run by full path. It isn't shipped here.
+Snapshots use `/usr/bin/anatase-snap` from this image (from 30 Oct 2026). The workbench (v4.7) calls it there and only falls back to its own copy in `_ANATASE_OPS/bin` on a host without it.
 
 ### Space files (`space/`)
 

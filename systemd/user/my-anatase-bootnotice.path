@@ -1,0 +1,10 @@
+[Unit]
+Description=my-anatase: watch the boot-state record
+PartOf=graphical-session.target
+
+[Path]
+PathChanged=/run/my-anatase/bootstate
+Unit=my-anatase-bootnotice.service
+
+[Install]
+WantedBy=graphical-session.target

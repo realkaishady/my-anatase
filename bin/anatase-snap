@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# anatase-snap (v4.7) - Btrfs/reflink snapshots of an Anatase Space. HOST ONLY.
+#
+# Shipped in the my-anatase image as /usr/bin/anatase-snap (root-owned, read-only), so nothing
+# running in a Space can change what you run with sudo. The workbench copy in
+# Projects/_ANATASE_OPS/bin is only a fallback for hosts without it.
+#
+# What it protects: /var/lib/spaces/<space> (the Space's OS files and its separate home).
+# What it does NOT protect: Projects, Downloads, your host home, /etc, or the OS image.
+#
+# Refuses to snapshot a running Space unless --stop and re-checks that it really stopped,
+# verifies the copy (a copy that doesn't verify is renamed <name>-CHECK and can't be restored),
+# restores by renaming (never rm -rf first), asks before restore/delete. After a snapshot it
+# records it for the account that ran it (SUDO_USER) in
+# Projects/_ANATASE_OPS/state/last-space-snapshot.<space> (and the older last-space-snapshot);
+# deleting a snapshot marks its record DELETED so it no longer counts.
+# It deliberately doesn't load the workbench library: it runs as root.
+#
+# Usage:
+#   anatase-snap create [space] [--stop]   # --stop: stop the Space, snapshot, start it again
+#   anatase-snap list
+#   anatase-snap restore <snapshot-name> [space] [--yes]
+#   anatase-snap delete <snapshot-name> [--yes]
+set -euo pipefail
+
+SPACES_ROOT="${SPACES_ROOT:-/var/lib/spaces}"
+SNAP_ROOT="${SNAP_ROOT:-/var/lib/spaces-snapshots}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+OS_RELEASE="${ANATASE_OS_RELEASE:-/etc/os-release}"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# Host only: Anatase's own os-release and not inside a container (a Space is one).
+os_id="$(sed -n 's/^ID=//p' "${OS_RELEASE}" 2>/dev/null | tr -d '"' | head -n 1)"
+[ "${os_id}" = "anatase" ] || die "anatase-snap runs on the Anatase host only (this is ID=${os_id:-unknown})."
+if [ -z "${ANATASE_CONTAINER+x}" ]; then
+  if command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --container --quiet; then
+    die "anatase-snap runs on the host, not inside a container or Space."
+  fi
+elif [ "${ANATASE_CONTAINER}" = 1 ]; then
+  die "anatase-snap runs on the host, not inside a container or Space."
+fi
+if [ "${EUID:-$(id -u)}" -ne 0 ] && [ -z "${ANATASE_SNAP_NO_SUDO:-}" ]; then
+  exec sudo -- "$0" "$@"
+fi
+
+ACTION="${1:-list}"; shift || true
+STOP=0; YES=0; pos=()
+for a in "$@"; do
+  case "$a" in
+    --stop) STOP=1 ;;
+    --yes) YES=1 ;;
+    *) pos+=("$a") ;;
+  esac
+done
+STAMP="$(date +%Y%m%d_%H%M%S)"
+
+valid_name() { case "$1" in ""|*/*|.|..) return 1 ;; *) return 0 ;; esac; }
+is_running() { "$SYSTEMCTL" is-active --quiet "spaces@$1.service"; }
+is_subvol() { btrfs subvolume show "$1" >/dev/null 2>&1; }
+count_entries() { find "$1" 2>/dev/null | wc -l; }  # no -xdev: a nested subvolume missing from the snapshot must show up as a mismatch
+
+confirm() {
+  [ "$YES" -eq 1 ] && return 0
+  local answer=""
+  printf '%s\nType "%s" to continue: ' "$1" "$2"
+  read -r answer || return 1
+  [ "$answer" = "$2" ]
+}
+
+copy_tree() {
+  # $1 source dir, $2 new dest, $3 "ro" for a read-only btrfs snapshot
+  if is_subvol "$1"; then
+    if [ "${3:-}" = "ro" ]; then btrfs subvolume snapshot -r "$1" "$2" >/dev/null
+    else btrfs subvolume snapshot "$1" "$2" >/dev/null; fi
+  else
+    cp -a --reflink=auto -- "$1" "$2"
+  fi
+}
+
+verify_copy() {
+  local a b
+  a="$(count_entries "$1")"; b="$(count_entries "$2")"
+  if [ "$a" != "$b" ]; then
+    echo "WARN: entry count differs (source ${a}, copy ${b})." >&2
+    echo "      A nested Btrfs subvolume inside the Space is not included in a snapshot." >&2
+    return 1
+  fi
+  echo "Verified: ${b} entries match."
+}
+
+# The workbench state folder of the account that ran this (shared with the Space).
+state_dir() {
+  local u="${ANATASE_USER:-${SUDO_USER:-}}" home
+  [ -n "$u" ] && [ "$u" != "root" ] || return 1
+  home="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+  [ -n "$home" ] || home="/var/home/$u"
+  case "$home" in /home/*) home="/var${home}" ;; esac
+  printf '%s\n' "${ANATASE_OPS_DIR:-${home}/Projects/_ANATASE_OPS}/state"
+}
+
+write_marker() {  # $1 file, $2 space, $3 name, $4 result
+  {
+    printf 'space=%s\n' "$2"
+    printf 'name=%s\n' "$3"
+    printf 'result=%s\n' "$4"
+    printf 'time=%s\n' "$(date -Iseconds)"
+    printf 'time_epoch=%s\n' "$(date +%s)"
+  } > "${1}.tmp" && mv -f -- "${1}.tmp" "$1"
+}
+
+record_marker() {  # $1 space, $2 snapshot name, $3 PASS|CHECK
+  local state u
+  state="$(state_dir)" || return 0
+  [ -d "$state" ] || return 0
+  u="${ANATASE_USER:-${SUDO_USER:-}}"
+  write_marker "${state}/last-space-snapshot.$1" "$1" "$2" "$3"
+  write_marker "${state}/last-space-snapshot" "$1" "$2" "$3"
+  printf '%s\thost\t%s\tanatase-snap create\t%s\t%s\n' "$(date -Iseconds)" "$u" "$3" "$2" >> "${state}/ops-ledger.tsv" 2>/dev/null || true
+  chown "$u:" "${state}/last-space-snapshot.$1" "${state}/last-space-snapshot" "${state}/ops-ledger.tsv" 2>/dev/null || true
+}
+
+# A deleted snapshot must not keep counting as "a recent snapshot exists".
+invalidate_marker() {  # $1 snapshot name
+  local state f u
+  state="$(state_dir)" || return 0
+  [ -d "$state" ] || return 0
+  u="${ANATASE_USER:-${SUDO_USER:-}}"
+  for f in "${state}"/last-space-snapshot "${state}"/last-space-snapshot.*; do
+    [ -f "$f" ] || continue
+    case "$f" in *.tmp) continue ;; esac
+    if [ "$(sed -n 's/^name=//p' "$f" | head -n 1)" = "$1" ]; then
+      sed -i 's/^result=.*/result=DELETED/' "$f"
+      chown "$u:" "$f" 2>/dev/null || true
+    fi
+  done
+  printf '%s\thost\t%s\tanatase-snap delete\tPASS\t%s\n' "$(date -Iseconds)" "$u" "$1" >> "${state}/ops-ledger.tsv" 2>/dev/null || true
+}
+
+case "$ACTION" in
+  create)
+    SPACE="${pos[0]:-ubuntu}"
+    valid_name "$SPACE" || die "bad Space name: $SPACE"
+    SRC="${SPACES_ROOT}/${SPACE}"
+    [ -d "$SRC" ] || die "no such Space: $SRC"
+    restarted=0
+    if is_running "$SPACE"; then
+      if [ "$STOP" -eq 1 ]; then
+        echo "Stopping spaces@${SPACE} for a consistent snapshot..."
+        "$SYSTEMCTL" stop "spaces@${SPACE}.service"
+        restarted=1
+        if is_running "$SPACE"; then
+          "$SYSTEMCTL" start "spaces@${SPACE}.service" 2>/dev/null || true
+          die "spaces@${SPACE} still reports active after stopping; no snapshot made."
+        fi
+      else
+        die "spaces@${SPACE} is running. Close its apps and re-run with --stop (or stop it yourself first)."
+      fi
+    fi
+    mkdir -p "$SNAP_ROOT"
+    DEST="${SNAP_ROOT}/${SPACE}-snap-${STAMP}"
+    if ! copy_tree "$SRC" "$DEST" ro; then
+      mv -- "$DEST" "${DEST}-INCOMPLETE" 2>/dev/null || true
+      if [ "$restarted" -eq 1 ]; then "$SYSTEMCTL" start "spaces@${SPACE}.service" || true; fi
+      die "copy failed; nothing usable was made (any partial copy is ${DEST##*/}-INCOMPLETE). The Space was started again."
+    fi
+    ok=0; verify_copy "$SRC" "$DEST" || ok=1
+    if [ "$restarted" -eq 1 ]; then "$SYSTEMCTL" start "spaces@${SPACE}.service"; fi
+    if [ "$ok" -eq 0 ]; then
+      record_marker "$SPACE" "${DEST##*/}" PASS
+      echo "PASS: snapshot ${DEST##*/}"
+    else
+      mv -- "$DEST" "${DEST}-CHECK"
+      record_marker "$SPACE" "${DEST##*/}-CHECK" CHECK
+      echo "CHECK: the copy didn't verify; kept as ${DEST##*/}-CHECK for inspection (restore refuses it)."
+      exit 1
+    fi
+    ;;
+  list)
+    [ -d "$SNAP_ROOT" ] || { echo "No snapshots yet (${SNAP_ROOT} does not exist)."; exit 0; }
+    find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%TY-%Tm-%Td %TH:%TM  %f\n' | sort -r
+    ;;
+  restore)
+    NAME="${pos[0]:-}"; SPACE="${pos[1]:-ubuntu}"
+    valid_name "$NAME" || die "usage: anatase-snap restore <snapshot-name> [space]"
+    valid_name "$SPACE" || die "bad Space name: $SPACE"
+    case "$NAME" in
+      *-CHECK|*-INCOMPLETE) die "${NAME} didn't verify when it was made; it can't be restored with this tool." ;;
+    esac
+    SNAP="${SNAP_ROOT}/${NAME}"; TARGET="${SPACES_ROOT}/${SPACE}"
+    [ -d "$SNAP" ] || die "snapshot not found: $SNAP"
+    case "$NAME" in "${SPACE}-"*) ;; *) echo "WARN: ${NAME} doesn't look like a snapshot of '${SPACE}'." >&2 ;; esac
+    confirm "This replaces Space '${SPACE}' with snapshot '${NAME}'. The current Space is kept as ${SPACE}-before-restore-${STAMP}." "$SPACE" \
+      || die "not confirmed; nothing changed."
+    if is_running "$SPACE"; then
+      "$SYSTEMCTL" stop "spaces@${SPACE}.service"
+      is_running "$SPACE" && die "spaces@${SPACE} still reports active after stopping; nothing changed."
+    fi
+    mkdir -p "$SNAP_ROOT"
+    KEEP="${SNAP_ROOT}/${SPACE}-before-restore-${STAMP}"
+    if [ -e "$TARGET" ]; then mv -- "$TARGET" "$KEEP"; fi
+    if ! copy_tree "$SNAP" "$TARGET" rw; then
+      echo "Restore failed; putting the previous Space back." >&2
+      [ -e "$TARGET" ] && mv -- "$TARGET" "${SNAP_ROOT}/${SPACE}-failed-restore-${STAMP}"
+      [ -e "$KEEP" ] && mv -- "$KEEP" "$TARGET"
+      exit 1
+    fi
+    "$SYSTEMCTL" start "spaces@${SPACE}.service" || echo "WARN: could not start spaces@${SPACE}; check: journalctl -u spaces@${SPACE}" >&2
+    echo "PASS: restored ${SPACE} from ${NAME}. Previous state kept at ${KEEP##*/}."
+    ;;
+  delete)
+    NAME="${pos[0]:-}"
+    valid_name "$NAME" || die "usage: anatase-snap delete <snapshot-name>"
+    SNAP="${SNAP_ROOT}/${NAME}"
+    [ -d "$SNAP" ] || die "snapshot not found: $SNAP"
+    confirm "This permanently deletes snapshot '${NAME}'." "$NAME" || die "not confirmed; nothing changed."
+    invalidate_marker "$NAME"
+    if is_subvol "$SNAP"; then btrfs subvolume delete "$SNAP" >/dev/null; else rm -rf -- "$SNAP"; fi
+    echo "PASS: deleted ${NAME}"
+    ;;
+  *)
+    sed -n '2,27p' "$0"; exit 1 ;;
+esac

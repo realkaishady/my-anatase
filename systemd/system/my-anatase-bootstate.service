@@ -1,0 +1,12 @@
+[Unit]
+Description=my-anatase: record which OS deployment is booted (for the login notice)
+After=local-fs.target
+ConditionPathExists=/run/ostree-booted
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/my-anatase/bootstate-write
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target bootc-status-updated.target

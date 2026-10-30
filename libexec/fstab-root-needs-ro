@@ -1,0 +1,19 @@
+#!/bin/sh
+# fstab-root-needs-ro (my-anatase) - ExecCondition for bootc-fstab-edit.service.
+#
+# bootc's boot-time generator enables bootc-fstab-edit.service on every boot whenever
+# /etc/fstab has Anaconda's header and lacks bootc's "# Updated by bootc-fstab-edit.service"
+# marker. When the "/" entry already has "ro" (Anatase's installer puts it there), the service
+# changes nothing, never writes the marker, and still rewrites the file, so it runs again at
+# the next boot (bootc-dev/bootc#2592). The old workaround was a marker line in /etc/fstab, but
+# each OS deployment keeps its own /etc, so a rollback brought the loop back (28 Oct 2026).
+#
+# Exit 0: "/" lacks ro, let bootc add it. Exit 1: "/" already has ro, skip the service
+# (systemd logs a skipped condition, not a failure). No "/" entry: exit 0 (bootc decides).
+FSTAB="${1:-/etc/fstab}"
+[ -r "$FSTAB" ] || exit 0
+awk '
+  /^[[:space:]]*#/ || NF < 4 { next }
+  $2 == "/" { found = 1; n = split($4, o, ","); for (i = 1; i <= n; i++) if (o[i] == "ro") ro = 1 }
+  END { if (found && ro) exit 1; exit 0 }
+' "$FSTAB"

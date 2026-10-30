@@ -2,24 +2,34 @@
 set -euo pipefail
 verify_failed=0
 
-echo "=== [1/6] Booted Image & Deployment Status ==="
-if [[ $EUID -eq 0 ]]; then
-  bootc status --format=json | jq -r '.status.booted.image | "Image:   \(.image.image)\nDigest:  \(.imageDigest)\nVersion: \(.version)"'
-else
-  sudo bootc status --format=json | jq -r '.status.booted.image | "Image:   \(.image.image)\nDigest:  \(.imageDigest)\nVersion: \(.version)"'
-fi
+echo "=== [1/8] Booted Image & Deployment Status ==="
+if [[ $EUID -eq 0 ]]; then status_json="$(bootc status --format=json)"; else status_json="$(sudo bootc status --format=json)"; fi
+printf '%s' "$status_json" | jq -r '.status.booted.image | "Image:   \(.image.image)\nDigest:  \(.imageDigest)\nVersion: \(.version)\nBuilt:   \(.timestamp)"'
+printf '%s' "$status_json" | jq -r '
+  def line(n; x): if x then "\(n): \(x.image.imageDigest | sub("^sha256:"; "") | .[0:12]) built \(x.image.timestamp | .[0:19])" else "\(n): none" end;
+  line("Staged  "; .status.staged), line("Rollback"; .status.rollback)'
+deploy_state="$(printf '%s' "$status_json" | jq -r '
+  .status as $s |
+  if ($s.rollbackQueued // false) then "queued"
+  elif ($s.rollback and ($s.booted.image.timestamp < $s.rollback.image.timestamp)) then "reverted"
+  else "ok" end')"
+case "$deploy_state" in
+  reverted) echo "WARNING: the booted image is OLDER than the rollback image: a rollback happened (hhd's 'Revert to Previous' runs one without asking). This boot uses that deployment's own /etc. Details: ops boot-state" ;;
+  queued) echo "WARNING: a rollback is queued for the next boot (undo before rebooting: sudo bootc rollback)" ;;
+  *) echo "OK: booted image is the newest deployed one" ;;
+esac
 
-echo -e "\n=== [2/6] ZRAM & Kernel Virtual Memory ==="
+echo -e "\n=== [2/8] ZRAM & Kernel Virtual Memory ==="
 zramctl --output NAME,ALGORITHM,DISKSIZE,DATA,COMPR,TOTAL || true
 echo "zswap enabled: $(cat /sys/module/zswap/parameters/enabled 2>/dev/null || echo 'N/A') (Expected: N)"
 sysctl vm.swappiness vm.vfs_cache_pressure vm.dirty_bytes net.ipv4.tcp_keepalive_time
 
-echo -e "\n=== [3/6] Storage I/O Schedulers ==="
+echo -e "\n=== [3/8] Storage I/O Schedulers ==="
 for dev in /sys/block/nvme* /sys/block/mmcblk*; do
   [[ -e "$dev/queue/scheduler" ]] && echo "$(basename "$dev"): $(cat "$dev/queue/scheduler")"
 done
 
-echo -e "\n=== [4/6] Bluetooth, NMI watchdog, THP, Flatpak auto-updates ==="
+echo -e "\n=== [4/8] Bluetooth, NMI watchdog, THP, Flatpak auto-updates ==="
 [[ -f /etc/udev/rules.d/99-bluetooth-wake.rules ]] && echo "OK: 99-bluetooth-wake.rules installed" || echo "MISSING: 99-bluetooth-wake.rules"
 echo "nmi_watchdog: $(cat /proc/sys/kernel/nmi_watchdog) (Expected: 0)"
 echo "THP defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag) (Expected: [defer+madvise])"
@@ -29,7 +39,7 @@ else
   echo "WARNING: Discover unattended updates are off in /etc/xdg/PlasmaDiscoverUpdates; Flatpaks won't auto-update"
 fi
 
-echo -e "\n=== [5/6] C4 USB Security Guardrail Audit ==="
+echo -e "\n=== [5/8] C4 USB Security Guardrail Audit ==="
 if grep -q '0666\|idVendor}=="\*"' /etc/udev/rules.d/99-usb-serial-passthrough.rules 2>/dev/null; then
   echo "FAIL: Unsafe 0666 or wildcard rule found!"
   verify_failed=1
@@ -37,12 +47,32 @@ else
   echo "OK: 99-usb-serial-passthrough.rules uses vendor-scoped TAG+=\"uaccess\" only."
 fi
 
-echo -e "\n=== [6/6] /etc/containers/policy.json Drift Check ==="
+echo -e "\n=== [6/8] /etc/containers/policy.json Drift Check ==="
 drift="$(sudo ostree admin config-diff | grep "containers/policy.json" || true)"
 if [[ -z "$drift" ]]; then
   echo "OK: /etc/containers/policy.json is unmodified (tracks image policy)."
 else
   echo "WARNING: Local /etc/containers/policy.json drift detected: $drift"
+fi
+
+echo -e "\n=== [7/8] fstab rewrite loop (bootc-dev/bootc#2592) ==="
+if [[ -f /usr/lib/systemd/system/bootc-fstab-edit.service.d/10-my-anatase-skip-if-ro.conf ]]; then
+  echo "OK: image drop-in skips bootc-fstab-edit when / already has ro"
+else
+  echo "MISSING: /usr/lib/systemd/system/bootc-fstab-edit.service.d/10-my-anatase-skip-if-ro.conf"
+  verify_failed=1
+fi
+runs="$(journalctl -b -u bootc-fstab-edit.service -o cat --no-pager 2>/dev/null | grep -c 'Updated /etc/fstab' || true)"
+echo "fstab rewrites this boot: ${runs} (Expected: 0)"
+
+echo -e "\n=== [8/8] my-anatase helpers ==="
+for f in /usr/bin/anatase-snap /usr/libexec/my-anatase/bootstate-write /usr/libexec/my-anatase/bootstate-notify; do
+  if [[ -x "$f" ]]; then echo "OK: $f"; else echo "MISSING: $f"; verify_failed=1; fi
+done
+if systemctl is-enabled --quiet my-anatase-bootstate.service 2>/dev/null; then
+  echo "OK: my-anatase-bootstate.service enabled ($(sed -n 's/^state=//p' /run/my-anatase/bootstate 2>/dev/null || echo 'no record yet'))"
+else
+  echo "WARNING: my-anatase-bootstate.service is not enabled"
 fi
 
 # A failed check above doesn't stop the later ones; report it at the end.

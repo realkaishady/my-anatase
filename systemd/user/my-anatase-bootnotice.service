@@ -1,0 +1,11 @@
+[Unit]
+Description=my-anatase: notice when the OS is running the previous version
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/my-anatase/bootstate-notify
+
+[Install]
+WantedBy=graphical-session.target

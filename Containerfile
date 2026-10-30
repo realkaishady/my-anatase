@@ -27,6 +27,19 @@ COPY cachyos/modprobe.d/ /etc/modprobe.d/
 # has its own /usr and /etc and can't see the host's).
 COPY --chmod=0755 bin/my-anatase-verify /usr/bin/my-anatase-verify
 
+# 3b. Host-only, root-run helpers (read-only here, so nothing in a Space can change them)
+# anatase-snap: Space snapshots (the workbench's copy in Projects is only a fallback).
+COPY --chmod=0755 bin/anatase-snap /usr/bin/anatase-snap
+
+# 3c. Boot state: skip bootc's fstab rewrite loop (bootc-dev/bootc#2592) in the image, so it
+# no longer depends on a marker line in one deployment's /etc; record which deployment is
+# booted and show a desktop notice when it's the older one (e.g. after hhd's Revert).
+COPY --chmod=0755 libexec/ /usr/libexec/my-anatase/
+COPY systemd/system/ /usr/lib/systemd/system/
+COPY systemd/user/ /usr/lib/systemd/user/
+RUN systemctl enable my-anatase-bootstate.service && \
+    systemctl --global enable my-anatase-bootnotice.service my-anatase-bootnotice.path
+
 # 4. Cleanup (mandatory before bootc container lint)
 RUN rm -rf /var /run/dnf && \
     mkdir -p /var/tmp
